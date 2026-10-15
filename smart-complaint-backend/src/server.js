@@ -17,6 +17,7 @@ const PORT = process.env.PORT || 8080;
 // Configured allowed origins for CORS
 const allowedOrigins = [
   "https://ai-ahtms6bxy-himavarshitha613-designs-projects.vercel.app",
+  "https://ai-cms-nine.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
   "http://127.0.0.1:5173",
