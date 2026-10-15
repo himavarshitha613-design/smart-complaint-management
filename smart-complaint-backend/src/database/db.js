@@ -3,54 +3,117 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const {
-  DB_HOST = "localhost",
-  DB_PORT = 3306,
-  DB_USER = "root",
-  DB_PASSWORD = "",
-  DB_NAME = "smart_complaints_db"
-} = process.env;
+// Helper to parse database configuration from environment variables
+export const getDatabaseConfig = () => {
+  const connectionUrl = process.env.DATABASE_URL || process.env.MYSQL_URL;
 
-// Connection Pool Configuration
+  if (connectionUrl) {
+    try {
+      const parsed = new URL(connectionUrl);
+      const isRemote = parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1";
+      const useSsl = process.env.DB_SSL === "true" || process.env.DB_SSL === "REQUIRED" || (process.env.DB_SSL !== "false" && isRemote);
+
+      return {
+        host: parsed.hostname,
+        port: parsed.port ? Number(parsed.port) : 3306,
+        user: decodeURIComponent(parsed.username || "root"),
+        password: decodeURIComponent(parsed.password || ""),
+        database: parsed.pathname.replace(/^\//, "") || "smart_complaints_db",
+        ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        connectTimeout: 15000
+      };
+    } catch (e) {
+      console.warn("⚠️  Could not parse DATABASE_URL as URL, falling back to individual variables:", e.message);
+    }
+  }
+
+  const host = process.env.DB_HOST || "localhost";
+  const isRemote = host !== "localhost" && host !== "127.0.0.1";
+  const useSsl = process.env.DB_SSL === "true" || process.env.DB_SSL === "REQUIRED" || (process.env.DB_SSL !== "false" && isRemote);
+
+  return {
+    host,
+    port: Number(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : "",
+    database: process.env.DB_NAME || "smart_complaints_db",
+    ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    connectTimeout: 15000
+  };
+};
+
+// Connection Pool Singleton
 let pool = null;
 
 export const getPool = () => {
   if (!pool) {
-    pool = mysql.createPool({
-      host: DB_HOST,
-      port: Number(DB_PORT),
-      user: DB_USER,
-      password: DB_PASSWORD,
-      database: DB_NAME,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0
-    });
+    const config = getDatabaseConfig();
+    pool = mysql.createPool(config);
   }
   return pool;
 };
 
-// Database Initialization & Verification
-export const initializeDatabase = async () => {
+// Check live database connectivity
+export const checkDatabaseHealth = async () => {
   try {
-    console.log(`🔌 Connecting to MySQL at ${DB_HOST}:${DB_PORT} as '${DB_USER}'...`);
-
-    // 1. First connect without database to ensure database exists
-    const rootConnection = await mysql.createConnection({
-      host: DB_HOST,
-      port: Number(DB_PORT),
-      user: DB_USER,
-      password: DB_PASSWORD
-    });
-
-    await rootConnection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;`);
-    await rootConnection.end();
-
-    console.log(`✅ Database '${DB_NAME}' verified/created.`);
-
-    // 2. Connect with pool and create tables
     const db = getPool();
+    await db.query("SELECT 1;");
+    return {
+      connected: true,
+      message: "MySQL connection healthy",
+      host: getDatabaseConfig().host,
+      database: getDatabaseConfig().database
+    };
+  } catch (err) {
+    return {
+      connected: false,
+      message: err.message,
+      code: err.code
+    };
+  }
+};
 
+// Database Initialization & Table Schemas
+export const initializeDatabase = async () => {
+  const config = getDatabaseConfig();
+  const maskedPassword = config.password ? "********" : "(empty)";
+  console.log(`🔌 Attempting MySQL connection to [${config.user}@${config.host}:${config.port}/${config.database}] (SSL: ${config.ssl ? "Enabled" : "Disabled"})...`);
+
+  try {
+    // 1. Try connecting directly to the specified database first
+    let db;
+    try {
+      db = getPool();
+      await db.query("SELECT 1;");
+      console.log(`✅ Connected directly to database '${config.database}'.`);
+    } catch (connErr) {
+      // If error is code 1049 (Unknown database) and we are on localhost, try creating it
+      if (connErr.code === "ER_BAD_DB_ERROR" && (config.host === "localhost" || config.host === "127.0.0.1")) {
+        console.log(`ℹ️ Database '${config.database}' does not exist on localhost. Creating it...`);
+        const rootConnection = await mysql.createConnection({
+          host: config.host,
+          port: config.port,
+          user: config.user,
+          password: config.password
+        });
+        await rootConnection.query(`CREATE DATABASE IF NOT EXISTS \`${config.database}\`;`);
+        await rootConnection.end();
+        console.log(`✅ Database '${config.database}' created.`);
+        // Reset pool
+        pool = null;
+        db = getPool();
+      } else {
+        throw connErr;
+      }
+    }
+
+    // 2. Create tables if they do not exist
     // Users table
     await db.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -97,7 +160,7 @@ export const initializeDatabase = async () => {
       );
     `);
 
-    // Complaint progress logs table
+    // Complaint progress / audit logs table
     await db.query(`
       CREATE TABLE IF NOT EXISTS complaint_logs (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -110,7 +173,7 @@ export const initializeDatabase = async () => {
       );
     `);
 
-    // Seed default departments if none exist
+    // Seed default departments if table is empty
     const [deptRows] = await db.query("SELECT COUNT(*) AS count FROM departments;");
     if (deptRows[0].count === 0) {
       await db.query(`
@@ -125,7 +188,7 @@ export const initializeDatabase = async () => {
       console.log("🌱 Default departments seeded.");
     }
 
-    // Seed default admin and users if none exist
+    // Seed default admin and users if table is empty
     const [userRows] = await db.query("SELECT COUNT(*) AS count FROM users;");
     if (userRows[0].count === 0) {
       // Hashed password for 'admin123' and 'user123'
@@ -140,7 +203,7 @@ export const initializeDatabase = async () => {
       console.log("🌱 Default users seeded (admin@smartcms.com / admin123).");
     }
 
-    // Seed default sample complaints if none exist
+    // Seed default sample complaints if table is empty
     const [compRows] = await db.query("SELECT COUNT(*) AS count FROM complaints;");
     if (compRows[0].count === 0) {
       await db.query(`
@@ -165,13 +228,17 @@ export const initializeDatabase = async () => {
     console.log("🎉 Database & tables initialized successfully!");
     return true;
   } catch (error) {
-    console.error("❌ Database initialization error:", error.message);
+    console.error("❌ MySQL Database Initialization Error:", error.message);
     if (error.code === "ER_ACCESS_DENIED_ERROR") {
       console.error("\n=======================================================");
       console.error("⚠️  ACTION REQUIRED: MySQL Access Denied!");
-      console.error("Please open 'smart-complaint-backend/.env' and update:");
-      console.error("   DB_PASSWORD=your_actual_mysql_password");
-      console.error("Then restart the backend server.");
+      console.error("Please verify DB_USER and DB_PASSWORD environment variables.");
+      console.error("=======================================================\n");
+    } else if (error.code === "ENOTFOUND" || error.code === "ECONNREFUSED") {
+      console.error("\n=======================================================");
+      console.error("⚠️  ACTION REQUIRED: Could not connect to MySQL server!");
+      console.error(`Check DB_HOST (${config.host}) and DB_PORT (${config.port}).`);
+      console.error("If deploying on Render, configure remote MySQL credentials.");
       console.error("=======================================================\n");
     }
     throw error;

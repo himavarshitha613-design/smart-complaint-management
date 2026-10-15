@@ -116,13 +116,15 @@ function SubmitComplaint() {
       formData.append("userName", currentUser.name || "Student User");
       formData.append("userEmail", currentUser.email || "student@example.com");
 
+      if (currentUser.id) {
+        formData.append("userId", currentUser.id);
+      }
+
       if (image) {
         formData.append("image", image);
       }
 
-      const res = await API.post("/complaints", formData, {
-        headers: { "Content-Type": "multipart/form-data" }
-      });
+      const res = await API.post("/complaints", formData);
 
       if (res.data.success) {
         alert(`🎉 Complaint Registered Successfully!\n\nTicket ID: ${res.data.complaintId}\nCategory: ${result.category}\nPriority: ${result.priority}\nAssigned To: ${result.department}\n\nStored securely in MySQL database.`);

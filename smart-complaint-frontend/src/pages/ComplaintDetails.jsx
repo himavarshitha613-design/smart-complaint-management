@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import API from "../services/api";
+import API, { getImageUrl } from "../services/api";
 
 function ComplaintDetails() {
   const { id } = useParams();
@@ -162,7 +162,7 @@ function ComplaintDetails() {
                 <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
                   <span className="small-label" style={{ display: "block", marginBottom: "8px" }}>Photo Evidence Attached</span>
                   <img
-                    src={`http://localhost:8080${complaint.image_url}`}
+                    src={getImageUrl(complaint.image_url)}
                     alt="Complaint evidence"
                     style={{ maxWidth: "340px", maxHeight: "220px", borderRadius: "10px", objectFit: "cover", border: "1px solid #cbd5e1" }}
                   />

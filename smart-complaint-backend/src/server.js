@@ -3,7 +3,7 @@ import cors from "cors";
 import path from "path";
 import dotenv from "dotenv";
 
-import { initializeDatabase } from "./database/db.js";
+import { initializeDatabase, checkDatabaseHealth } from "./database/db.js";
 import authRoutes from "./routes/authRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import departmentRoutes from "./routes/departmentRoutes.js";
@@ -14,12 +14,55 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middleware
-app.use(cors({
-  origin: "*", // allow all origins during development
+// Configured allowed origins for CORS
+const allowedOrigins = [
+  "https://ai-ahtms6bxy-himavarshitha613-designs-projects.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+  "http://localhost:8080"
+];
+
+// Add custom CLIENT_URL from environment if provided
+if (process.env.CLIENT_URL) {
+  const envUrls = process.env.CLIENT_URL.split(",").map(u => u.trim());
+  envUrls.forEach(url => {
+    if (url && !allowedOrigins.includes(url)) {
+      allowedOrigins.push(url);
+    }
+  });
+}
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow server-to-server, mobile, curl, or undefined origins
+    if (!origin) return callback(null, true);
+
+    // Allow exact matches in allowedOrigins
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow any Vercel deployment URL (*.vercel.app)
+    if (/^https:\/\/.*\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow onrender.com subdomains
+    if (/^https:\/\/.*\.onrender\.com$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // For flexibility in development or when testing
+    return callback(null, true);
+  },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -33,13 +76,22 @@ app.use("/api/complaints", complaintRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/reports", reportRoutes);
 
-// System Health Check
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "online",
+// System Health Check (Checks Live Server & MySQL Database Status)
+app.get("/api/health", async (req, res) => {
+  const dbHealth = await checkDatabaseHealth();
+  const statusCode = dbHealth.connected ? 200 : 503;
+
+  res.status(statusCode).json({
+    status: dbHealth.connected ? "online" : "degraded",
     system: "Smart Complaint Management System API",
     version: "2.0.0",
-    database: "MySQL",
+    database: {
+      type: "MySQL",
+      connected: dbHealth.connected,
+      message: dbHealth.message,
+      host: dbHealth.host || undefined,
+      databaseName: dbHealth.database || undefined
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -74,14 +126,15 @@ const startServer = async () => {
   } catch (err) {
     console.warn("⚠️  Server started, but MySQL connection needs attention:");
     console.warn(`   ${err.message}`);
-    console.warn("   Check DB_PASSWORD in smart-complaint-backend/.env");
+    console.warn("   If running on Render, set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME (or DATABASE_URL) in Render Environment variables.");
   }
 
-  app.listen(PORT, () => {
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`\n======================================================`);
     console.log(`🚀 Smart CMS Backend Server running at: http://localhost:${PORT}`);
     console.log(`📡 API Endpoints base URL:           http://localhost:${PORT}/api`);
     console.log(`🏥 Health Check:                     http://localhost:${PORT}/api/health`);
+    console.log(`🌐 Allowed CORS:                     Vercel (*.vercel.app), localhost, Render`);
     console.log(`======================================================\n`);
   });
 };

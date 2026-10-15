@@ -9,13 +9,14 @@ import {
   analyzeComplaint
 } from "../controllers/complaintController.js";
 import { upload } from "../middleware/uploadMiddleware.js";
+import { optionalAuthenticateUser } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 router.post("/analyze", analyzeComplaint);
-router.post("/", upload.single("image"), createComplaint);
+router.post("/", optionalAuthenticateUser, upload.single("image"), createComplaint);
 router.get("/", getAllComplaints);
-router.get("/my", getMyComplaints);
+router.get("/my", optionalAuthenticateUser, getMyComplaints);
 router.get("/:id", getComplaintById);
 router.put("/:id/status", updateComplaintStatus);
 router.delete("/:id", deleteComplaint);

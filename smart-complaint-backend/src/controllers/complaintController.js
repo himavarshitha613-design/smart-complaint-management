@@ -49,8 +49,9 @@ export const createComplaint = async (req, res) => {
       imageUrl = `/uploads/${req.file.filename}`;
     }
 
-    // User info (from JWT if authenticated, or from body)
-    const userId = req.user ? req.user.id : (req.body.userId || null);
+    // User info (from JWT token if authenticated, or from request body)
+    const rawUserId = req.user ? req.user.id : req.body.userId;
+    const userId = rawUserId ? parseInt(rawUserId, 10) || null : null;
     const userName = req.user ? req.user.name : (req.body.userName || "Student User");
     const userEmail = req.user ? req.user.email : (req.body.userEmail || "student@example.com");
 
@@ -121,7 +122,7 @@ export const getAllComplaints = async (req, res) => {
       params.push(pattern, pattern, pattern, pattern);
     }
 
-    if (status && status !== "All Status") {
+    if (status && status !== "All Status" && status !== "All") {
       query += " AND status = ?";
       params.push(status);
     }
@@ -170,9 +171,12 @@ export const getMyComplaints = async (req, res) => {
     let query = "SELECT * FROM complaints WHERE 1=1";
     const params = [];
 
-    if (userId) {
+    if (userId && userEmail) {
       query += " AND (user_id = ? OR user_email = ?)";
       params.push(userId, userEmail);
+    } else if (userId) {
+      query += " AND user_id = ?";
+      params.push(userId);
     } else if (userEmail) {
       query += " AND user_email = ?";
       params.push(userEmail);
@@ -242,7 +246,7 @@ export const getComplaintById = async (req, res) => {
 export const updateComplaintStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, resolution_notes = "" } = req.body;
+    const { status, resolution_notes } = req.body;
 
     if (!status) {
       return res.status(400).json({
@@ -253,14 +257,17 @@ export const updateComplaintStatus = async (req, res) => {
 
     const db = getPool();
 
-    const [compCheck] = await db.query("SELECT id, status FROM complaints WHERE id = ?;", [id]);
+    const [compCheck] = await db.query("SELECT id, status, resolution_notes FROM complaints WHERE id = ?;", [id]);
     if (compCheck.length === 0) {
       return res.status(404).json({ success: false, message: "Complaint not found." });
     }
 
+    const existingNotes = compCheck[0].resolution_notes || "";
+    const finalNotes = resolution_notes !== undefined ? resolution_notes : existingNotes;
+
     await db.query(
       "UPDATE complaints SET status = ?, resolution_notes = ? WHERE id = ?;",
-      [status, resolution_notes, id]
+      [status, finalNotes, id]
     );
 
     // Log progress change
@@ -271,12 +278,14 @@ export const updateComplaintStatus = async (req, res) => {
       id,
       status,
       `Status changed to ${status}`,
-      resolution_notes || `Status transitioned to ${status}.`
+      finalNotes || `Status transitioned to ${status}.`
     ]);
 
     return res.json({
       success: true,
-      message: `Complaint ${id} status updated to ${status}.`
+      message: `Complaint ${id} status updated to ${status}.`,
+      status,
+      resolution_notes: finalNotes
     });
   } catch (error) {
     return res.status(500).json({
