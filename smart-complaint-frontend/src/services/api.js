@@ -1,8 +1,9 @@
 import axios from "axios";
 
 // Base API URL: uses Vite environment variable if configured, otherwise deployed Render backend
-export const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "https://smart-complaint-management-h52s.onrender.com/api";
+const rawBaseUrl = (import.meta.env.VITE_API_URL || "https://smart-complaint-management-h52s.onrender.com/api").trim();
+const sanitizedUrl = rawBaseUrl.replace(/\/+$/, "");
+export const API_BASE_URL = sanitizedUrl.endsWith("/api") ? sanitizedUrl : `${sanitizedUrl}/api`;
 
 // Backend Origin (without /api suffix) for serving static uploads, images, etc.
 export const BACKEND_URL = API_BASE_URL.replace(/\/api\/?$/, "");
@@ -40,6 +41,21 @@ API.interceptors.request.use(
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor: handle unauthorized token expiration
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      if (localStorage.getItem("token")) {
+        console.warn("Session expired or unauthorized. Clearing credentials.");
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+      }
+    }
     return Promise.reject(error);
   }
 );

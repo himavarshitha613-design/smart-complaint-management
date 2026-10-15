@@ -1,5 +1,6 @@
 {
-  "buildCommand": "cd smart-complaint-frontend && npm install && npm run build",
+  "installCommand": "cd smart-complaint-frontend && npm install",
+  "buildCommand": "cd smart-complaint-frontend && npm run build",
   "outputDirectory": "smart-complaint-frontend/dist",
   "rewrites": [
     {

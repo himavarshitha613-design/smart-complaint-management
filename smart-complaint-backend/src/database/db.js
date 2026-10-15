@@ -12,21 +12,44 @@ export const getDatabaseConfig = () => {
       const parsed = new URL(connectionUrl);
       const isRemote = parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1";
       const useSsl = process.env.DB_SSL === "true" || process.env.DB_SSL === "REQUIRED" || (process.env.DB_SSL !== "false" && isRemote);
+      const dbFromPath = parsed.pathname ? parsed.pathname.replace(/^\//, "").split("?")[0] : "";
 
       return {
         host: parsed.hostname,
         port: parsed.port ? Number(parsed.port) : 3306,
         user: decodeURIComponent(parsed.username || "root"),
         password: decodeURIComponent(parsed.password || ""),
-        database: parsed.pathname.replace(/^\//, "") || "smart_complaints_db",
+        database: dbFromPath || process.env.DB_NAME || "smart_complaints_db",
         ssl: useSsl ? { rejectUnauthorized: false } : undefined,
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0,
-        connectTimeout: 15000
+        connectTimeout: 20000,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10000
       };
     } catch (e) {
-      console.warn("⚠️  Could not parse DATABASE_URL as URL, falling back to individual variables:", e.message);
+      console.warn("⚠️  Could not parse DATABASE_URL via standard URL parser, attempting pattern fallback:", e.message);
+      const match = connectionUrl.match(/^mysql(?:2)?:\/\/(?:([^:]+)(?::([^@]*))?@)?([^:\/?#]+)(?::(\d+))?(?:\/([^?#]*))?/);
+      if (match) {
+        const host = match[3];
+        const isRemote = host !== "localhost" && host !== "127.0.0.1";
+        const useSsl = process.env.DB_SSL === "true" || process.env.DB_SSL === "REQUIRED" || (process.env.DB_SSL !== "false" && isRemote);
+        return {
+          host,
+          port: match[4] ? Number(match[4]) : 3306,
+          user: decodeURIComponent(match[1] || "root"),
+          password: decodeURIComponent(match[2] || ""),
+          database: match[5] || process.env.DB_NAME || "smart_complaints_db",
+          ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+          waitForConnections: true,
+          connectionLimit: 10,
+          queueLimit: 0,
+          connectTimeout: 20000,
+          enableKeepAlive: true,
+          keepAliveInitialDelay: 10000
+        };
+      }
     }
   }
 
@@ -44,12 +67,17 @@ export const getDatabaseConfig = () => {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    connectTimeout: 15000
+    connectTimeout: 20000,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000
   };
 };
 
 // Connection Pool Singleton
 let pool = null;
+let isInitialized = false;
+
+export const isDatabaseInitialized = () => isInitialized;
 
 export const getPool = () => {
   if (!pool) {
@@ -61,20 +89,24 @@ export const getPool = () => {
 
 // Check live database connectivity
 export const checkDatabaseHealth = async () => {
+  const config = getDatabaseConfig();
   try {
     const db = getPool();
     await db.query("SELECT 1;");
     return {
       connected: true,
       message: "MySQL connection healthy",
-      host: getDatabaseConfig().host,
-      database: getDatabaseConfig().database
+      host: config.host,
+      database: config.database
     };
   } catch (err) {
+    const errorDetails = err.message || err.code || err.sqlMessage || "Unable to connect to MySQL database";
     return {
       connected: false,
-      message: err.message,
-      code: err.code
+      message: errorDetails,
+      code: err.code || "ERR_DB_DISCONNECTED",
+      host: config.host,
+      database: config.database
     };
   }
 };
@@ -226,6 +258,7 @@ export const initializeDatabase = async () => {
     }
 
     console.log("🎉 Database & tables initialized successfully!");
+    isInitialized = true;
     return true;
   } catch (error) {
     console.error("❌ MySQL Database Initialization Error:", error.message);
